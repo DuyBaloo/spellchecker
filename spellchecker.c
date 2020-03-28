@@ -60,7 +60,7 @@ int lookup(char *word)
     word[len - 2] = '\n';
     word[len - 1] = '\0';
 
-    while(fgets(buf, DICT_BUF, dictonary) != NULL) {
+    while(fgets(buf, DICT_BUF, dictionary) != NULL) {
         //printf("%s", buf);
 
         //keep getting new word until it matches
@@ -68,16 +68,11 @@ int lookup(char *word)
         {
             continue;
         }
-        else if(strcmp(buf, word) == 0)
+        else
         {
             //printf("%s", word);
             rewind(dictionary);
             return ++match;
-        }
-        else
-        {
-            printf("%s", "Word is not valid.");
-            return match;
         }
         
     }
