@@ -1,10 +1,14 @@
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
 #include <unistd.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <sys/types.h>
-#include <pthread.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <sys/wait.h>
 
 #define DEFAULT_PORT 5000
 #define DEFAULT_DICTIONARY "dictionary.txt"
@@ -14,6 +18,14 @@
 FILE *dictionary;
 FILE *log;
 int listen_port;
+int client[BUFFER_MAX];
+char *logs[BUFFER_MAX];
+
+typedef struct server{
+    int client_num, log_num, log_read, log_write, client_read, client_write;
+    pthread_mutex_t client_mutex, log_mutex;
+    pthread_cond_t client_notempty, client_notfull, log_notemty, log_notfull;
+}server;
 /*****************************************************************************************/
 
 int open_listenfd(int port)
@@ -79,6 +91,7 @@ int lookup(char *word)
     rewind(dictionary);
     return match;
 }
+
 //main with argc, argv[]
 int main(int argc, char *argv[]) 
 {
