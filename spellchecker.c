@@ -95,17 +95,32 @@ int lookup(char *word)
 //main with argc, argv[]
 int main(int argc, char *argv[]) 
 {
-    //if unable to open file, 
+    //if unable to open file, set file to be the default, then set port to default
     if (argc == 1) 
     {
         if (!(dictionary = fopen(DEFAULT_DICTIONARY, "r"))) 
         {
             perror("Dictionary");
-            exit(EXIT_FAILURE);
+            exit(0);
         }
         listen_port = DEFAULT_PORT;
     }
-
+    else if(argc == 2)
+    {
+        //take the input, try to set the argv[1] to be the socket port, if not successful, set argv[1]
+        //to be the dictionary file and set socket port to be default, if all fails, prints error
+        char *string;
+        if(!(listen_port = (int) strtol(argv[1], &string, 10)))
+        {
+            if(!(dictionary = fopen(argv[1], "r")))
+            {
+                perror("Fail to open dictionary file.");
+                exit(0);
+            }
+            listen_port = DEFAULT_PORT;
+        }
+    }
+    
 /*initiate server
 get words from file
 get input from user
