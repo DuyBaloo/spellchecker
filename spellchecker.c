@@ -65,7 +65,7 @@ char *remove_log(server *serv)
     char *res = logs[serv->log_read];
 
     //created with the help of Prof. Fiore
-    //clear all
+    //clear current index
     logs[serv->log_read] = (char *) calloc(1, sizeof(char *));
 
     //pointer increment, if reach the end, wrap around to the start
