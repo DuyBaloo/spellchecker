@@ -75,6 +75,59 @@ char *remove_log(server *serv)
     return res;
 }
 
+int remove_client(server *serv) {
+    int socket = clients[serv->client_read];
+
+    //clear index
+    clients[serv->client_read] = 0;
+
+    //if reaches the end, wrap to the beginning
+    serv->client_read = (++serv->client_read) % BUFFER_MAX;
+
+    //decrease # of clients
+    --serv->client_count;
+
+    return socket;
+}
+
+void insert_log(server *serv, char *word, int spell_check) {
+    //queue of words
+    char string[DICT_BUFFER];
+
+    clients[serv->client_read] = (int) calloc(1, sizeof(int));
+
+    //remove '\n' at the end
+    size_t len = strlen(word);
+    word[len - 1] = '\0';
+
+    //variable to hold result of spellcheck
+    char *res;
+
+    //if the result matched with dictionary, return 1 to set res to OK, else res is MISPELLED
+    if(spell_check)
+    {
+        res = "OK";
+    }
+    else
+    {
+        res = "MISPELLED";
+    }
+    
+    //formatted as "WORD" is OK/MISPELLED
+    strcpy(string, word);
+    strcat(string, " is ");
+    strcat(string, res);
+
+    //put string to the queue
+    strcpy(logs[serv->log_write], string);
+
+    //move the pointer, if reaches the end, wrap around to beginning
+    serv->log_write = (++serv->log_write) % BUFFER;
+
+    //Increase number of logs
+    ++serv->log_count;
+}
+
 void *log_worker(void* args)
 {
     server *serv = args;
@@ -84,7 +137,7 @@ void *log_worker(void* args)
         //lock the lock
         pthread_mutex_lock(&serv->log_mutex);
 
-        //constantly checks, if log is not empty -> unlock the log mutex
+        //constantly checks, if log is empty -> unlock the log mutex
         //with the help of 
         //https://stackoverflow.com/questions/16522858/understanding-of-pthread-cond-wait-and-pthread-cond-signal/16524148
         while (serv->log_read == serv->log_write && serv->log_num == 0) {
