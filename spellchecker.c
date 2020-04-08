@@ -11,7 +11,7 @@
 #include <sys/wait.h>
 #include <pthread.h>
 
-#define DEFAULT_PORT 5000
+#define DEFAULT_PORT 8000
 #define DEFAULT_DICTIONARY "dictionary.txt"
 #define DICT_BUFFER 128
 #define BUFFER 5
@@ -53,7 +53,7 @@ int create_listenfd(int port)
         return -1;
     }
 
-    if (listen(listenfd, 20) < 0){
+    if (listen(listenfd, 10) < 0){
         return -1;
     }
 
@@ -288,6 +288,53 @@ void *log_worker(void* args)
     }
 }
 
+void server_init(server *serv) {
+
+    serv->client_num = 0;
+    serv->log_num = 0;
+    serv->client_read = 0;
+    serv->client_write = 0;
+    serv->log_read = 0;
+    serv->log_write = 0;
+
+    if (pthread_mutex_init(&serv->client_mutex, NULL) != 0) 
+    {
+        perror("Client mutex");
+    }
+
+    if (pthread_mutex_init(&serv->log_mutex, NULL) != 0) 
+    {
+        perror("Log mutex");
+    }
+
+    if (pthread_cond_init(&serv->log_notfull, NULL) != 0) 
+    {
+        perror("Log not full");
+    }
+
+    if (pthread_cond_init(&serv->log_notempty, NULL) != 0) 
+    {
+        perror("Log not empty");
+    }
+
+    
+    if (pthread_cond_init(&serv->client_notempty, NULL) != 0) 
+    {
+        perror("Client not empty");
+    }
+    
+    if (pthread_cond_init(&serv->client_notfull, NULL) != 0) 
+    {
+        perror("Client not full");
+    }
+
+    for(int i = 0; i < BUFFER; i++) 
+    {
+        client[i] = (int) calloc(1, sizeof(int));
+        logs[i] = (char *) calloc(1, sizeof(char *));
+    }
+}
+
 //main with argc, argv[]
 int main(int argc, char *argv[]) 
 {
@@ -338,6 +385,7 @@ int main(int argc, char *argv[])
         }
     }
 
+    printf("port %d: \n", listen_port);
     int socket;
     if((socket = create_listenfd(listen_port)) < 0)
     {
@@ -345,19 +393,9 @@ int main(int argc, char *argv[])
         exit(0);
     }
 
-    server *serv;
     //initialize the variabals in struct
-    serv->client_num = 0;
-    serv->log_num = 0;
-    serv->client_read = 0;
-    serv->client_write = 0;
-    serv->log_read = 0;
-    serv->log_write = 0;
-
-    for(int i = 0; i < BUFFER; i++) {
-        client[i] = (int) calloc(1, sizeof(int));
-        logs[i] = (char *) calloc(1, sizeof(char *));
-    }
+    server *serv = malloc(sizeof(*serv));
+    server_init(serv);
 
     //create threads queue
     pthread_t workers[BUFFER];
@@ -369,7 +407,7 @@ int main(int argc, char *argv[])
 
     //open log file for writing
     if ((logfile = fopen("log.txt", "w+")) == NULL) {
-        perror("Log file creation");
+        perror("Fail to create log file");
         exit(0);
     }
 
@@ -382,10 +420,10 @@ int main(int argc, char *argv[])
 
     char *greeting = "This is a spell checker. You can type anything to check if it exists in dictionary.\n";
 
-    //start accepting clients
+    //start getting clients
     while (1) {
         if ((connected_socket = accept(socket, NULL, NULL)) < 1) {
-            perror("Can't connect to client");
+            perror("Fail to connect to client");
             break;
         }
         puts("Client connected.");
