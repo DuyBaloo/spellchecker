@@ -9,6 +9,7 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
+#include <pthread.h>
 
 #define DEFAULT_PORT 5000
 #define DEFAULT_DICTIONARY "dictionary.txt"
@@ -16,7 +17,7 @@
 #define BUFFER 5
 
 FILE *dictionary;
-FILE *log;
+FILE *logfile;
 int listen_port;
 int client[BUFFER];
 char *logs[BUFFER];
@@ -24,7 +25,7 @@ char *logs[BUFFER];
 typedef struct server{
     int client_num, log_num, log_read, log_write, client_read, client_write;
     pthread_mutex_t client_mutex, log_mutex;
-    pthread_cond_t client_notempty, client_notfull, log_notemty, log_notfull;
+    pthread_cond_t client_notempty, client_notfull, log_notempty, log_notfull;
 }server;
 /*****************************************************************************************/
 
@@ -75,26 +76,38 @@ char *remove_log(server *serv)
     return res;
 }
 
+void insert_client(server *serv, int socket) {
+
+    //write to client
+    client[serv->client_write] = socket;
+
+    //move the pointer, if reaches the end, wrap around to start
+    serv->client_write = (++serv->client_write) % BUFFER;
+
+    //increase # of clients
+    ++serv->client_num;
+}
+
 int remove_client(server *serv) {
-    int socket = clients[serv->client_read];
+    int socket = client[serv->client_read];
 
     //clear index
-    clients[serv->client_read] = 0;
+    client[serv->client_read] = 0;
 
     //if reaches the end, wrap to the beginning
-    serv->client_read = (++serv->client_read) % BUFFER_MAX;
+    serv->client_read = (++serv->client_read) % BUFFER;
 
     //decrease # of clients
-    --serv->client_count;
+    --serv->client_num;
 
     return socket;
 }
 
-void insert_log(server *serv, char *word, int spell_check) {
+void insert_log(server *serv, char *word, int match) {
     //queue of words
     char string[DICT_BUFFER];
 
-    clients[serv->client_read] = (int) calloc(1, sizeof(int));
+    client[serv->client_read] = (int) calloc(1, sizeof(int));
 
     //remove '\n' at the end
     size_t len = strlen(word);
@@ -104,7 +117,7 @@ void insert_log(server *serv, char *word, int spell_check) {
     char *res;
 
     //if the result matched with dictionary, return 1 to set res to OK, else res is MISPELLED
-    if(spell_check)
+    if(match)
     {
         res = "OK";
     }
@@ -125,36 +138,7 @@ void insert_log(server *serv, char *word, int spell_check) {
     serv->log_write = (++serv->log_write) % BUFFER;
 
     //Increase number of logs
-    ++serv->log_count;
-}
-
-void *log_worker(void* args)
-{
-    server *serv = args;
-
-    while(1) 
-    {
-        //lock the lock
-        pthread_mutex_lock(&serv->log_mutex);
-
-        //constantly checks, if log is empty -> unlock the log mutex
-        //with the help of 
-        //https://stackoverflow.com/questions/16522858/understanding-of-pthread-cond-wait-and-pthread-cond-signal/16524148
-        while (serv->log_read == serv->log_write && serv->log_num == 0) {
-            pthread_cond_wait(&serv->log_notempty, &serv->log_mutex);
-        }
-
-        //remove a log
-        char *res = remove_log(serv);
-
-        fprintf(log, "%s\n", res);
-
-        fflush(log);
-        //signal telling that log is not full
-        pthread_cond_signal(&serv->log_notfull);
-
-        pthread_mutex_unlock(&serv->log_mutex);
-    }
+    ++serv->log_num;
 }
 
 int lookup(char *word) 
@@ -189,6 +173,119 @@ int lookup(char *word)
 
     rewind(dictionary);
     return match;
+}
+
+void *worker(void* args) {
+    server *serv = args;
+    char *error = "Error receiving word";
+    int returnedByte;
+    char *res;
+    char *word;
+    char *prompt = ">";
+
+    while(1) {
+        //lock client queue
+        pthread_mutex_lock(&serv->client_mutex);
+
+        //if client queue is empty
+        while (serv->client_read == serv->client_write && serv->client_num == 0) {
+            pthread_cond_wait(&serv->client_notempty, &serv->client_mutex);
+        }
+
+        //get socket
+        int socket = remove_client(serv);
+
+        //send signal queue not full
+        pthread_cond_signal(&serv->client_notfull);
+
+        //unlock mutex
+        pthread_mutex_unlock(&serv->client_mutex);
+
+        //keep receiving words until the client disconnects
+        while(1) {
+            send(socket, prompt, strlen(prompt), 0);
+            //set received word to 0
+            word = calloc(DICT_BUFFER, 1);
+
+            //receive word
+            returnedByte = (int) recv(socket, word, DICT_BUFFER, 0);
+
+            //if error
+            if (returnedByte < 0) {
+                send(socket, error, strlen(error), 0);
+                continue;
+            }
+
+            //break if user hit escape or exit
+            if(word[0] == 27) {
+                send(socket, "Goodbye.\n", strlen("Goodbye.\n"), 0);
+                break;
+            }
+
+            //return 1 or 0 depending on correctness of word
+            int match = lookup(word);
+            if(match)
+            {
+                res = "OK";
+            }
+            else
+            {
+                res = "MISPELLED";
+            }
+            
+            //print results to client
+            send(socket, res, strlen(res), 0);
+
+            //push the result to the log queue, get lock first
+            pthread_mutex_lock(&serv->log_mutex);
+
+            //check if the buffer is full
+            while(serv->log_write == serv->log_read && serv->log_num == BUFFER) {
+                pthread_cond_wait(&serv->log_notfull, &serv->log_mutex);
+            }
+
+            //write to log queue
+            insert_log(serv, word, match);
+
+
+            //signal log queue not empty
+            pthread_cond_signal(&serv->log_notempty);
+
+            //unlock the mutex
+            pthread_mutex_unlock(&serv->log_mutex);
+        }
+        close(socket);
+    }
+    return NULL;
+}
+
+void *log_worker(void* args)
+{
+    server *serv = args;
+
+    while(1) 
+    {
+        //lock the lock
+        pthread_mutex_lock(&serv->log_mutex);
+
+        //constantly checks, if log is empty -> unlock the log mutex
+        //with the help of 
+        //https://stackoverflow.com/questions/16522858/understanding-of-pthread-cond-wait-and-pthread-cond-signal/16524148
+        while (serv->log_read == serv->log_write && serv->log_num == 0) {
+            pthread_cond_wait(&serv->log_notempty, &serv->log_mutex);
+        }
+
+        //remove a log
+        char *res = remove_log(serv);
+
+        fprintf(logfile, "%s\n", res);
+
+        fflush(logfile);
+        //signal telling that log is not full
+        pthread_cond_signal(&serv->log_notfull);
+
+        pthread_mutex_unlock(&serv->log_mutex);
+    }
 }
 
 //main with argc, argv[]
@@ -247,6 +344,74 @@ int main(int argc, char *argv[])
         perror("Error creating socket.");
         exit(0);
     }
+
+    server *serv;
+    //initialize the variabals in struct
+    serv->client_num = 0;
+    serv->log_num = 0;
+    serv->client_read = 0;
+    serv->client_write = 0;
+    serv->log_read = 0;
+    serv->log_write = 0;
+
+    for(int i = 0; i < BUFFER; i++) {
+        client[i] = (int) calloc(1, sizeof(int));
+        logs[i] = (char *) calloc(1, sizeof(char *));
+    }
+
+    //create threads queue
+    pthread_t workers[BUFFER];
+
+    //add threads
+    for (int i = 0; i < BUFFER; i++) {
+        pthread_create(&workers[i], NULL, worker, (void *)serv);
+    }
+
+    //open log file for writing
+    if ((logfile = fopen("log.txt", "w+")) == NULL) {
+        perror("Log file creation");
+        exit(0);
+    }
+
+    //create threads for logs
+    pthread_t logger;
+    pthread_create(&logger, NULL, log_worker, (void *) serv);
+
+    //create socket connecntion
+    int connected_socket;
+
+    char *greeting = "This is a spell checker. You can type anything to check if it exists in dictionary.\n";
+
+    //start accepting clients
+    while (1) {
+        if ((connected_socket = accept(socket, NULL, NULL)) < 1) {
+            perror("Can't connect to client");
+            break;
+        }
+        puts("Client connected.");
+
+        //send greeting message
+        send(connected_socket, greeting, strlen(greeting), 0);
+
+        //lock client
+        pthread_mutex_lock(&serv->client_mutex);
+
+        //check if clients queue is full
+        while (serv->client_read == serv->client_write && serv->client_num == BUFFER) {
+            pthread_cond_wait(&serv->client_notfull, &serv->client_mutex);
+        }
+
+        //signal client not full
+        pthread_cond_signal(&serv->client_notempty);
+
+        //unlock client queue
+        pthread_mutex_unlock(&serv->client_mutex);
+    }
+
+    close(socket);
+    close(connected_socket);
+    fclose(logfile);
+    return 0;
     
 }    
 /*initiate server
@@ -255,4 +420,4 @@ get input from user
 lock the lock
 do a lookup
 return result
-unlock the lock
+unlock the lock*/
